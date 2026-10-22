@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трекер привычек</title>
+<!-- ФРОНТЕНД: только показывает данные и отправляет запросы на сервер (server.py). Вся логика - в Python. -->
+<style>
+  body { font-family: Arial, sans-serif; background: #f2f5f9; margin: 0; padding: 20px; }
+  .page { max-width: 760px; margin: 0 auto; }
+  h1 { text-align: center; color: #2c5282; }
+  h3 { color: #2c5282; }
+  .box { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 4px #0002; }
+  input, button { padding: 8px; font-size: 15px; border-radius: 6px; border: 1px solid #bbb; }
+  button { background: #3182ce; color: #fff; border: none; cursor: pointer; }
+  button.red { background: #e53e3e; }
+  button.grey { background: #e2e8f0; color: #222; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .head h2 { margin: 0; }
+  #msg { font-weight: bold; min-height: 22px; }
+  #msg.ok { color: #2f855a; }
+  #msg.err { color: #c53030; }
+  .alert { background: #fefcbf; border: 2px solid #d69e2e; border-radius: 8px; padding: 12px; margin-bottom: 10px;
+           font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+  .stats { display: flex; gap: 8px; margin: 10px 0; }
+  .stats div { flex: 1; background: #ebf4ff; border-radius: 8px; padding: 8px; text-align: center; font-size: 13px; }
+  .stats b { display: block; font-size: 22px; color: #2c5282; }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+  .cal b { font-size: 13px; color: #777; }
+  .cal button { background: #edf2f7; color: #222; border: none; }
+  .cal .done { background: #38a169; color: #fff; }
+  .cal .miss { background: #fed7d7; }
+  .cal .off { background: none; color: #aaa; cursor: default; }
+  .cal .today { outline: 2px solid #2c5282; }
+  .nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .strike { text-decoration: line-through; color: #999; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Трекер привычек</h1>
+  <div id="alerts"></div>
+
+  <div class="box">
+    <b>Новая привычка</b>
+    <div class="row">
+      <input id="hName" placeholder="Например: Гитара 20 минут" maxlength="60" size="30">
+      Время: <input type="time" id="hTime">
+    </div>
+    <div class="row" id="hDays"></div>
+    <button onclick="addHabit()">Добавить</button>
+  </div>
+
+  <div class="box">
+    <b>Напоминание (один раз)</b>
+    <div class="row">
+      <input id="rText" placeholder="Например: Позвонить маме" maxlength="80" size="30">
+      <input type="date" id="rDate">
+      <input type="time" id="rTime">
+      <button onclick="addReminder()">Добавить</button>
+    </div>
+  </div>
+
+  <p id="msg"></p>
+  <h3>Напоминания</h3>
+  <div id="reminders"></div>
+  <h3>Привычки</h3>
+  <div class="nav">
+    <button class="grey" onclick="load(state.prev)">← Назад</button>
+    <b id="title"></b>
+    <button class="grey" onclick="load(state.next)">Вперёд →</button>
+  </div>
+  <div id="habits"></div>
+</div>
+
+<script>
+  var WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+  var state = null;          // последние данные от сервера
+  var pendingDelete = "";    // ждём второго нажатия «Точно удалить?»
+
+  // ----- связь с бэкендом -----
+  function api(action, body) {
+    return fetch("/api/" + action, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json(); });
+  }
+
+  function load(month) {
+    return fetch("/api/state?m=" + (month || (state ? state.month : "")))
+      .then(function (r) { return r.json(); })
+      .then(function (data) { state = data; render(); });
+  }
+
+  // отправить действие на сервер, показать ответ и обновить страницу
+  function send(action, body, okText) {
+    pendingDelete = "";
+    api(action, body).then(function (res) {
+      showMsg(res.ok ? (okText || "Готово.") : res.error, res.ok);
+      return load();
+    });
+  }
+
+  // ----- действия пользователя -----
+  function addHabit() {
+    var days = [];
+    document.querySelectorAll("#hDays input").forEach(function (c) { if (c.checked) days.push(+c.value); });
+    api("habit", { name: document.getElementById("hName").value, weekdays: days, time: document.getElementById("hTime").value })
+      .then(function (res) {
+        showMsg(res.ok ? "Привычка добавлена." : res.error, res.ok);
+        if (res.ok) document.getElementById("hName").value = "";
+        return load();
+      });
+  }
+
+  function addReminder() {
+    api("reminder", { text: document.getElementById("rText").value, date: document.getElementById("rDate").value,
+                      time: document.getElementById("rTime").value })
+      .then(function (res) {
+        showMsg(res.ok ? "Напоминание добавлено." : res.error, res.ok);
+        if (res.ok) document.getElementById("rText").value = "";
+        return load();
+      });
+  }
+
+  function del(kind, i) {                       // двухшаговое удаление
+    var key = kind + i;
+    if (pendingDelete === key) return send("delete", { kind: kind, i: i }, "Удалено.");
+    pendingDelete = key;
+    showMsg("Нажми «Точно удалить?» ещё раз.", false);
+    render();
+  }
+
+  function showMsg(text, ok) {
+    var el = document.getElementById("msg");
+    el.textContent = text;
+    el.className = ok ? "ok" : "err";
+  }
+
+  // ----- отрисовка -----
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function delLabel(key) { return pendingDelete === key ? "Точно удалить?" : "Удалить"; }
+
+  function render() {
+    document.getElementById("title").textContent = state.title;
+
+    var html = state.reminders.length ? "" : "<p>Напоминаний нет.</p>";
+    state.reminders.forEach(function (r) {
+      var p = r.date.split("-");
+      html += '<div class="box head"><span class="' + (r.done ? "strike" : "") + '"><b>' + esc(r.text) + "</b><br>" +
+        p[2] + "." + p[1] + "." + p[0] + " в " + r.time + "</span><span>" +
+        '<button class="grey" onclick="send(\'reminder_done\', {i: ' + r.i + '})">' + (r.done ? "Вернуть" : "Выполнено") + "</button> " +
+        '<button class="red" onclick="del(\'reminder\', ' + r.i + ')">' + delLabel("reminder" + r.i) + "</button></span></div>";
+    });
+    document.getElementById("reminders").innerHTML = html;
+
+    html = state.habits.length ? "" : "<p>Привычек пока нет.</p>";
+    state.habits.forEach(function (h) {
+      var days = h.weekdays.map(function (n) { return WD[n]; }).join(", ");
+      html += '<div class="box"><div class="head"><div><h2>' + esc(h.name) + "</h2>" + days +
+        (h.time ? " · в " + h.time : "") + "</div><div>" +
+        '<button onclick="send(\'mark\', {i: ' + h.i + ", day: '" + state.today + "', only_set: true})\">Отметить сегодня</button> " +
+        '<button class="red" onclick="del(\'habit\', ' + h.i + ')">' + delLabel("habit" + h.i) + "</button></div></div>" +
+        '<div class="stats"><div><b>' + h.current + "</b>текущая серия</div><div><b>" + h.best + "</b>лучшая серия</div><div><b>" +
+        h.percent + "%</b>выполнено</div><div><b>" + h.total + "</b>всего отметок</div></div>" +
+        '<div class="cal">' + WD.map(function (w) { return "<b>" + w + "</b>"; }).join("") + "<span></span>".repeat(h.offset);
+      h.cells.forEach(function (c) {
+        html += '<button class="' + c.state + (c.today ? " today" : "") + '" onclick="send(\'mark\', {i: ' + h.i +
+                ", day: '" + c.day + "'})\">" + c.n + "</button>";
+      });
+      html += "</div></div>";
+    });
+    document.getElementById("habits").innerHTML = html;
+  }
+
+  // ----- оповещения: сервер говорит, что ждёт сегодня; фронтенд следит за временем -----
+  function checkDue() {
+    if (!state) return;
+    var n = new Date();
+    var hm = ("0" + n.getHours()).slice(-2) + ":" + ("0" + n.getMinutes()).slice(-2);
+    state.due.forEach(function (it) {
+      var key = "shown" + n.toDateString() + it.t + it.text;
+      var seen = false;
+      try { seen = sessionStorage.getItem(key); } catch (e) {}
+      if (hm >= it.t && !seen) {
+        try { sessionStorage.setItem(key, "1"); } catch (e) {}
+        document.getElementById("alerts").innerHTML += '<div class="alert"><span>⏰ ' + esc(it.text) + " (" + it.t +
+          ')</span><button class="grey" onclick="this.parentNode.remove()">Закрыть</button></div>';
+      }
+    });
+  }
+
+  // ----- запуск -----
+  WD.forEach(function (w, n) {
+    document.getElementById("hDays").innerHTML += '<label><input type="checkbox" value="' + n + '" checked>' + w + "</label> ";
+  });
+  var now = new Date();
+  document.getElementById("rDate").value = now.getFullYear() + "-" + ("0" + (now.getMonth() + 1)).slice(-2) + "-" + ("0" + now.getDate()).slice(-2);
+  load().then(checkDue);
+  setInterval(function () { load().then(checkDue); }, 15000);
+</script>
+</body>
+</html>
